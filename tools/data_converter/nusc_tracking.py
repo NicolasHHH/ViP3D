@@ -9,8 +9,11 @@ from pyquaternion import Quaternion
 from shapely.geometry import MultiPoint, box
 from typing import List, Tuple, Union
 
+# import mmengine
 from mmdet3d.core.bbox.box_np_ops import points_cam2img
 from mmdet3d.datasets import NuScenesDataset
+# from mmdet3d.structures.ops.box_np_ops import points_cam2img
+# from mmdet3d.datasets.convert_utils import NuScenesNameMapping
 
 #  remove the classes barrier, trafficcone and construction_vehicle
 nus_categories = ('car', 'truck', 'trailer', 'bus',
@@ -123,7 +126,7 @@ def get_available_scenes(nusc):
                 # path from lyftdataset is absolute path
                 lidar_path = lidar_path.split(f'{os.getcwd()}/')[-1]
                 # relative path
-            if not mmcv.is_filepath(lidar_path):
+            if not mmcv.is_filepath(lidar_path): # mmcv
                 scene_not_exist = True
                 break
             else:

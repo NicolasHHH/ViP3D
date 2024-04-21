@@ -30,7 +30,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
                  in_channels,
                  num_reg_fcs=2,
                  num_cams=6,
-                 num_feature_levels=4,
+                 num_feature_levels=2,
                  transformer=None,
                  pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                  positional_encoding=dict(

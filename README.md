@@ -14,26 +14,26 @@
 Use the following commands to prepare the python environment. 
 #### 1) Create conda environment
 ```bash
-conda create -n vip3d python=3.6
+conda create -n vip3d python=3.8
 ```
 Supported python versions are 3.6, 3.7, 3.8. 
 #### 2) Install pytorch
 ```bash
 conda activate vip3d
-pip install torch==1.10+cu111 torchvision==0.11.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+pip install torch==1.10+cu113 torchvision==0.11.0+cu113 -f https://download.pytorch.org/whl/torch_stable.html
 ```
-#### 3) Install mmcv, mmdet
+#### 3) Install mmcv, mmdet  (Depreciated, see mmdetetion3d)
 ```bash
-pip install mmcv-full==1.4.0 -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.10/index.html
-pip install mmdet==2.24.1
+pip install mmcv-full==1.4.0 -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.10/index.html
+pip install mmdet==2.24.0
 ```
 
-#### 4) Install other packages
+#### 4) Install other packages  (Depreciated mmdetetion3d)
 ```bash
 pip install -r requirements.txt
 ```
 
-#### 5) Install mmdet3d
+#### 5) Install mmdet3d (Depreciated, see mmdetetion3d)
 ```bash
 cd ~
 git clone https://github.com/open-mmlab/mmdetection3d.git
@@ -90,7 +90,7 @@ The training stage requires ~ 17 GB GPU memory, and takes ~ 3 days for 24 epochs
 
 Run evaluation using the following command:
 ```bash
-PYTHONPATH=. python tools/test.py plugin/vip3d/configs/vip3d_resnet50_3frame.py work_dirs/vip3d_resnet50_3frame.1/epoch_24.pth --eval bbox
+PYTHONPATH=. python tools/test.py plugin/vip3d/configs/vip3d_resnet50_3frame.py work_dirs/vip3d_resnet50_3frame/epoch_24.pth --eval bbox
 ```
 The checkpoint ```epoch_24.pth``` can be downloaded from [here](https://drive.google.com/drive/folders/18q2sQ-J-AxqeCO8FaAWKQ9Fi13PPv_MR?usp=drive_link).
 
