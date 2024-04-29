@@ -81,7 +81,7 @@ def parse_args():
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
         help='job launcher')
-    parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--local_rank', type=int, default=3)
     parser.add_argument('--output_dir', default=None)
 
     args = parser.parse_args()
