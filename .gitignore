@@ -1,0 +1,16 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# ignore .idea
+.idea
+
+ckpts/
+data/
+
+# ignore weight files
+*.pth
+
+vis_results/
+venv/
+work_dirs/
