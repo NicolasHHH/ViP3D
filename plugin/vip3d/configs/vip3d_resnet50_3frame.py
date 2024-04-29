@@ -276,7 +276,7 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 24
-evaluation = dict(interval=24)
+evaluation = dict(interval=6)
 
 runner = dict(type='EpochBasedRunner', max_epochs=24)
 
