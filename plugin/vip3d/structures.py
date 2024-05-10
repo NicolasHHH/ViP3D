@@ -32,6 +32,9 @@ class Instances:
        .. code-block:: python
           category_3_detections = instances[instances.pred_classes == 3]
           confident_detections = instances[instances.scores > 0.9]
+    4. fields: ref_pts, query, output_embedding, obj_idxes[-1], matched_gt_idx[-1],
+               disappear_time[0], scores, track_scores, pred_boxes[N 10], pred_logits[N C],
+               mem_bank, mem_padding_mask, save_period, save_thresh,
     """
 
     def __init__(self, image_size: Tuple[int, int], **kwargs: Any):

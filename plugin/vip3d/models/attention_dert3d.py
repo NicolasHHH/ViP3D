@@ -140,7 +140,7 @@ class Detr3DCrossAtten(BaseModule):
                 Default: None.
             key_pos (Tensor): The positional encoding for `key`. Default
                 None.
-            reference_points (Tensor):  The normalized reference
+            reference_points (Tensor):  The noDetr3DCamTrackTransformerrmalized reference
                 points with shape (bs, num_query, 4),
                 all elements is range in [0, 1], top-left (0,0),
                 bottom-right (1, 1), including padding area.

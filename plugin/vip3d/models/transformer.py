@@ -138,7 +138,7 @@ class Detr3DCamTransformerPlus(BaseModule):
 class Detr3DCamTrackTransformer(BaseModule):
     """Implements the DeformableDETR transformer. 
         Specially designed for track: keep xyz trajectory, and 
-        kep bbox size(which should be consisten across frames)
+        keep bbox size(which should be consistent across frames)
 
     Args:
         num_feature_levels (int): Number of feature maps from FPN:
@@ -228,6 +228,7 @@ class Detr3DCamTrackTransformer(BaseModule):
         query = query.permute(1, 0, 2)
         # memory = memory.permute(1, 0, 2)
         query_pos = query_pos.permute(1, 0, 2)
+        # Detr3DCamTrackPlusTransformerDecoder
         inter_states, inter_references, inter_box_sizes = self.decoder(
             query=query,
             key=None,
@@ -281,7 +282,7 @@ class Detr3DCamTrackPlusTransformerDecoder(TransformerLayerSequence):
                 return_intermediate is `False`, otherwise it has shape
                 [num_layers, num_query, bs, embed_dims].
         """
-        output = query
+        output = query  # torch.Size([300, 1, 256])
         intermediate = []
         intermediate_reference_points = []
         intermediate_box_sizes = []

@@ -7,6 +7,13 @@ from typing import Optional, List
 from mmdet.models.utils.transformer import inverse_sigmoid
 from ..structures import Instances
 
+# 查询交互模块 20240505
+# 核心类是 QueryInteractionModule，继承自 QueryInteractionBase
+# QueryInteractionModule 依次执行 _select_active_tracks 和 _update_track_embedding
+# _select_active_tracks 用于选择激活的track，_update_track_embedding 用于更新track的embedding
+# _select_active_tracks 会根据训练状态，随机丢弃一部分track，然后添加一部分False Positive track
+
+
 
 def random_drop_tracks(track_instances: Instances, drop_probability: float) -> Instances:
     if drop_probability > 0 and len(track_instances) > 0:
@@ -90,16 +97,19 @@ class QueryInteractionModule(QueryInteractionBase):
         self.activation = F.relu
 
     def _update_track_embedding(self, track_instances: Instances) -> Instances:
+        # Instances: query, output_embedding, pred_boxes, obj_idxes, iou, scores
+        # query: [num_tracks, 512], output_embedding: [num_tracks, 256]
         if len(track_instances) == 0:
             return track_instances
-        dim = track_instances.query.shape[1]
+        dim = track_instances.query.shape[1]  # 512
         out_embed = track_instances.output_embedding
-        query_pos = track_instances.query[:, :dim // 2]
-        query_feat = track_instances.query[:, dim // 2:]
+        query_pos = track_instances.query[:, :dim // 2]  # 256
+        query_feat = track_instances.query[:, dim // 2:]  # 256
         q = k = query_pos + out_embed
 
         # attention
         tgt = out_embed
+        # [:,None] is used to add a new dimension, equivalent to unsqueeze(-1)
         tgt2 = self.self_attn(q[:, None], k[:, None], value=tgt[:, None])[0][:, 0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
@@ -116,6 +126,7 @@ class QueryInteractionModule(QueryInteractionBase):
             query_pos = self.norm_pos(query_pos)
             track_instances.query[:, :dim // 2] = query_pos
 
+        # add and norm
         query_feat2 = self.linear_feat2(self.dropout_feat1(self.activation(self.linear_feat1(tgt))))
         query_feat = query_feat + self.dropout_feat2(query_feat2)
         query_feat = self.norm_feat(query_feat)
@@ -131,17 +142,19 @@ class QueryInteractionModule(QueryInteractionBase):
                        active_track_instances: Instances) -> Instances:
         '''
         self.fp_ratio is used to control num(add_fp) / num(active)
+
+        active_track_instances: Instances, track_instances[obj_idxes >= 0] + dropout
         '''
         inactive_instances = track_instances[track_instances.obj_idxes < 0]
 
         # add fp for each active track in a specific probability.
-        fp_prob = torch.ones_like(active_track_instances.scores) * \
-                  self.fp_ratio
+        fp_prob = torch.ones_like(active_track_instances.scores) * self.fp_ratio
         selected_active_track_instances = active_track_instances[
-            torch.bernoulli(fp_prob).bool()]
+            torch.bernoulli(fp_prob).bool()]  # 每个active track有fp_prob的概率被选中
         num_fp = len(selected_active_track_instances)
 
         if len(inactive_instances) > 0 and num_fp > 0:
+            # inactive 的数量必须大于等于 selected_active 的数量
             if num_fp >= len(inactive_instances):
                 fp_track_instances = inactive_instances
             else:
@@ -164,9 +177,12 @@ class QueryInteractionModule(QueryInteractionBase):
         track_instances: Instances = data['track_instances']
         if self.training:
             # active_idxes = (track_instances.obj_idxes >= 0) & (track_instances.iou > 0.5)
+            # obj取值范围 ？
             active_idxes = (track_instances.obj_idxes >= 0)
             active_track_instances = track_instances[active_idxes]
             # set -2 instead of -1 to ensure that these tracks will not be selected in matching.
+
+            # 训练时，随机丢弃一部分track，然后添加一部分fp track
             active_track_instances = self._random_drop_tracks(active_track_instances)
             if self.fp_ratio > 0:
                 active_track_instances = self._add_fp_tracks(track_instances, active_track_instances)
@@ -191,4 +207,6 @@ def build_qim(args, dim_in, hidden_dim, dim_out):
         'QIMBase': QueryInteractionModule,
     }
     assert qim_type in interaction_layers, 'invalid query interaction layer: {}'.format(qim_type)
+
+    # 调用 QIM constructor
     return interaction_layers[qim_type](args, dim_in, hidden_dim, dim_out)

@@ -60,13 +60,15 @@ class MemoryBank(nn.Module):
             track_instances.mem_bank[saved_idxes] = torch.cat([prev_embed[:, 1:], save_embed], dim=1)
 
     def _forward_temporal_attn(self, track_instances):
+
         if len(track_instances) == 0:
             return track_instances
 
-        key_padding_mask = track_instances.mem_padding_mask
+        key_padding_mask = track_instances.mem_padding_mask  # padding是干什么的？ 如何定义？
 
         valid_idxes = key_padding_mask[:, -1] == 0
         embed = track_instances.output_embedding[valid_idxes]  # (n, 256)
+        # mem_bank 和 key_padding_mask 都是 (n, 4, 256) 关系？
 
         if len(embed) > 0:
             prev_embed = track_instances.mem_bank[valid_idxes]
@@ -78,9 +80,11 @@ class MemoryBank(nn.Module):
                 key_padding_mask=key_padding_mask,
             )[0][0]
 
+            # ffn
             embed = self.temporal_norm1(embed + embed2)
             embed2 = self.temporal_fc2(F.relu(self.temporal_fc1(embed)))
             embed = self.temporal_norm2(embed + embed2)
+            # reassign to update
             track_instances.output_embedding = track_instances.output_embedding.clone()
             track_instances.output_embedding[valid_idxes] = embed
 
@@ -97,6 +101,8 @@ class MemoryBank(nn.Module):
 
 
 def build_memory_bank(args, dim_in, hidden_dim, dim_out):
+    # 封装了MemoryBank的构建函数，根据配置文件中的memory_bank_type参数选择构建的MemoryBank类型
+    # 由于只有一种MemoryBank类型，所以没用。
     name = args['memory_bank_type']
     memory_banks = {
         'MemoryBank': MemoryBank,

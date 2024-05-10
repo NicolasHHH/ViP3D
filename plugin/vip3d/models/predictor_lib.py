@@ -5,6 +5,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
 
+# accessed 240507
+# Layer norm, MLP
+# GlobalGraph, CrossAttention, GlobalGraphRes, PointSubGraph, SubGraph
 
 class LayerNorm(nn.Module):
     r"""
@@ -118,6 +121,7 @@ class CrossAttention(GlobalGraph):
 
     def forward(self, hidden_states_query, hidden_states_key=None, attention_mask=None, mapping=None,
                 return_scores=False):
+        # overload
         mixed_query_layer = self.query(hidden_states_query)
         mixed_key_layer = self.key(hidden_states_key)
         mixed_value_layer = self.value(hidden_states_key)
@@ -144,6 +148,7 @@ class CrossAttention(GlobalGraph):
 
 
 class GlobalGraphRes(nn.Module):
+    # Residual connection of two GlobalGraph
     def __init__(self, hidden_size):
         super(GlobalGraphRes, self).__init__()
         self.global_graph = GlobalGraph(hidden_size, hidden_size // 2)

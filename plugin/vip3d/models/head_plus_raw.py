@@ -70,7 +70,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
         self.activate = build_activation_layer(self.act_cfg)
         self.positional_encoding = build_positional_encoding(
             positional_encoding)
-        self.transformer = build_transformer(transformer)
+        self.transformer = build_transformer(transformer) # Detr3DCamTrackTransformer
         self.embed_dims = self.transformer.embed_dims
         self.num_feature_levels = num_feature_levels
         self.num_cams = num_cams
@@ -141,12 +141,18 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
     def forward(self, mlvl_feats, radar_feats,
                 query_embeds, ref_points, ref_size, img_metas, petr_feature=False):
         """Forward function.
+        Call:
+            self.pts_bbox_head(
+                img_feats, radar_feats, track_instances.query,
+                track_instances.ref_pts, ref_box_sizes, img_metas, )
         Args:
-            mlvl_feats (tuple[Tensor]): List of Features from the upstream
+            输入图像特征、毫米波、agent queries、参考点和参考大小
+            multi-level multi-view (tuple[Tensor]): List of Features from the upstream
                 network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
+                (B, N, C, H, W). # 4 B=1 V=6 256 116x200 / 58x100 / 29 50 / 15 25
+            radar_feats (Tensor) : radar features of shape (B, N, C)
             query_embeds (Tensor):  pos_embed and feature for querys of shape
-                (num_query, embed_dim*2)
+                (num_query, embed_dim*2)  # B=1 100 35
             ref_points (Tensor):  3d reference points associated with each query
                 shape (num_query, 3)
                 value is in inevrse sigmoid space
@@ -154,6 +160,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
                 shape (num_query, 3)
                 value in log space. 
         Returns:
+            输出 num_dec_layers 个分类和回归分支的预测、最后一层的query特征和参考点
             all_cls_scores (Tensor): Outputs from the classification head, \
                 shape [nb_dec, bs, num_query, cls_out_channels]. Note \
                 cls_out_channels should includes background.
@@ -165,13 +172,13 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
         """
 
         if True:
-            # TODO: add postional encoding here to multilevel feats
+            # TODO: add postional encoding here to multi-level feats
             batch_size = mlvl_feats[0].size(0)
             input_img_h, input_img_w = img_metas[0]['input_shape']
             img_masks = mlvl_feats[0].new_ones(
                 (batch_size, input_img_h, input_img_w))
             for img_id in range(batch_size):
-                img_h, img_w, _ = img_metas[img_id]['img_shape'][0][0]
+                img_h, img_w, _ = img_metas[img_id]['img_shape'][0][0]  # h = 900 w = 1600
                 img_masks[img_id, :img_h, :img_w] = 0
 
             for i, feat in enumerate(mlvl_feats):
@@ -204,23 +211,23 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
             radar_feats=radar_feats,
         )
 
-        # change to: (num_dec, bs, num_query, embed_dim)
-        hs = hs.permute(0, 2, 1, 3)
+        # change to: (num_dec, bs, num_query, embed_dim) 输出
+        hs = hs.permute(0, 2, 1, 3)  # [6, 300, 1, 256] -> [6, 1, 300, 256]
         outputs_classes = []
         outputs_coords = []
 
-        for lvl in range(hs.shape[0]):
-            if lvl == 0:
+        for lvl in range(hs.shape[0]):  # iterate on levels 0 - 5
+            if lvl == 0:  # 300 3
                 reference = ref_points.sigmoid()
                 ref_size_base = ref_size
-            else:
+            else:  # [6, 1, 300, 3]
                 reference = inter_references[lvl - 1]
-                ref_size_base = inter_box_sizes[lvl - 1]
+                ref_size_base = inter_box_sizes[lvl - 1]  # 第五层不要了 ？
             reference = inverse_sigmoid(reference)
-            outputs_class = self.cls_branches[lvl](hs[lvl])
-            xywlzh = self.reg_branches[lvl](hs[lvl])
-            direction_pred = self.direction_branches[lvl](hs[lvl])
-            velo_pred = self.velo_branches[lvl](hs[lvl])
+            outputs_class = self.cls_branches[lvl](hs[lvl])  # 每层输出预测类别 [1 300 7]
+            xywlzh = self.reg_branches[lvl](hs[lvl])  # 每层输出预测bbox [1 300 6]
+            direction_pred = self.direction_branches[lvl](hs[lvl])  # 每层输出预测方向 [1 300 2]
+            velo_pred = self.velo_branches[lvl](hs[lvl])  # 每层输出预测速度 [1 300 2]
 
             # TODO: check the shape of reference
             assert reference.shape[-1] == 3
@@ -232,7 +239,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
                 [xywlzh[..., 0:2], xywlzh[..., 4:5]], dim=-1,
             )
             xywlzh[..., 0:1] = (xywlzh[..., 0:1] *
-                                (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0])
+                                (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0])  # rescale
             xywlzh[..., 1:2] = (xywlzh[..., 1:2] *
                                 (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1])
             xywlzh[..., 4:5] = (xywlzh[..., 4:5] *

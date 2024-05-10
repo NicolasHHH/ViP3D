@@ -86,9 +86,9 @@ class ViP3D(MVXTwoStageDetector):
                  embed_dims=256,
                  num_query=300,
                  num_classes=7,
-                 bbox_coder=None,
-                 qim_args=None,
-                 mem_cfg=None,
+                 bbox_coder=None,  # DETRTrack3DCoder
+                 qim_args=None,  # query interaction module
+                 mem_cfg=None,  # memory bank
                  radar_encoder=None,
                  fix_feats=False,
                  score_thresh=None,
@@ -167,7 +167,7 @@ class ViP3D(MVXTwoStageDetector):
         self.l2g_r_mat = None
         self.l2g_t = None
 
-        self.radar_encoder = build_radar_encoder(radar_encoder)
+        self.radar_encoder = build_radar_encoder(radar_encoder)  # BN1d + Linear 13->32
 
         self.do_pred = do_pred
         self.relative_pred = relative_pred
@@ -183,13 +183,13 @@ class ViP3D(MVXTwoStageDetector):
         if True:
             self.agents_layer_0 = agents_layer_0
             if self.agents_layer_0:
-                self.agents_layer_mlp_0 = nn.Sequential(*[predictor_lib.MLP(256, 256) for _ in range(agents_layer_0_num)])
+                self.agents_layer_mlp_0 = nn.Sequential(*[predictor_lib.MLP(256, 256) for _ in range(agents_layer_0_num)])  # 2
 
-        self.only_matched_query = only_matched_query
+        self.only_matched_query = only_matched_query  # False
 
         if self.do_pred:
             from .predictor_vectornet import VectorNet
-            self.predictor = VectorNet(**predictor)
+            self.predictor = VectorNet(**predictor)  #  (** unpacks the dictionary into keyword arguments
             self.empty_linear = nn.Linear(embed_dims, embed_dims)
 
     def velo_update(self, ref_pts, velocity, l2g_r1, l2g_t1, l2g_r2, l2g_t2,
@@ -263,15 +263,15 @@ class ViP3D(MVXTwoStageDetector):
                 B, N, C, H, W = img.size()
                 img = img.view(B * N, C, H, W)
 
-            if self.use_grid_mask:
+            if self.use_grid_mask:  # True 区域遮照增强，只有训练时使用
                 # img: fp16
                 img = self.grid_mask(img)
                 # img: fp32
             # slightly different
 
             # img: fp32
-            img_feats = self.img_backbone(img)
-            # img: fp16
+            img_feats = self.img_backbone(img)  #
+            # img: fp16 [6, 256, 232, 400] [6, 512, 116, 200] [6, 1024, 58, 100] [6, 2048, 29, 50]
 
         else:
             return None
@@ -281,7 +281,7 @@ class ViP3D(MVXTwoStageDetector):
         for img_feat in img_feats:
             BN, C, H, W = img_feat.size()
             img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
-        return img_feats_reshaped
+        return img_feats_reshaped  # [1, 6, 256, 116, 200] 58, 100] 29, 50] 15, 25]
 
     @auto_fp16(apply_to=('img'), out_fp32=True)
     def extract_feat(self, points, img, radar=None, img_metas=None):
@@ -290,7 +290,7 @@ class ViP3D(MVXTwoStageDetector):
             radar_feats = self.radar_encoder(radar)
         else:
             radar_feats = None
-        if self.fix_feats:
+        if self.fix_feats:  # False
             with torch.no_grad():
                 img_feats = self.extract_img_feat(img, img_metas)
         else:
@@ -307,6 +307,8 @@ class ViP3D(MVXTwoStageDetector):
         return gt_instances
 
     def _generate_empty_tracks(self, proposals=None):
+        # track 是什么？ 和 instance 的关系是什么？
+        # track 是一个instance的集合，每个instance有一个obj_id
         track_instances = Instances((1, 1))
         num_queries, dim = self.query_embedding.weight.shape  # (300, 256 * 2)
         device = self.query_embedding.weight.device
@@ -315,20 +317,22 @@ class ViP3D(MVXTwoStageDetector):
         # ref_pts is decoded from query by nn.Linear(self.embed_dims, 3)
         query = self.query_embedding.weight
 
-        # init boxes: xy, wl, z, h, sin, cos, vx, vy, vz
-        box_sizes = self.bbox_size_fc(query[..., :dim // 2])
+        # init boxes: (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy)
+        box_sizes = self.bbox_size_fc(query[..., :dim // 2])  # (Nq 256) -- FC --> (Nq 3)
         pred_boxes_init = torch.zeros(
             (len(query), 10), dtype=torch.float, device=device)
 
-        pred_boxes_init[..., 2:4] = box_sizes[..., 0:2]
-        pred_boxes_init[..., 5:6] = box_sizes[..., 2:3]
+        pred_boxes_init[..., 2:4] = box_sizes[..., 0:2]  # w l
+        pred_boxes_init[..., 5:6] = box_sizes[..., 2:3]  # h
 
         if True:
-            track_instances.ref_pts = self.reference_points(query[..., :dim // 2])
+            # 向instances中添加query 、 ref_points 字段
+            track_instances.ref_pts = self.reference_points(query[..., :dim // 2])  # (Nq 256) -- FC --> (Nq 3)
             track_instances.query = query
 
         track_instances.output_embedding = torch.zeros(
-            (len(track_instances), dim >> 1), device=device)
+            (len(track_instances), dim >> 1), device=device)   # (Nq 256)
+        # dim >> 1 v.s. dim // 2: same for positive integers but different for negative ones
 
         track_instances.obj_idxes = torch.full(
             (len(track_instances),), -1, dtype=torch.long, device=device)
@@ -348,7 +352,7 @@ class ViP3D(MVXTwoStageDetector):
             (len(track_instances), self.num_classes),
             dtype=torch.float, device=device)
 
-        mem_bank_len = self.mem_bank_len
+        mem_bank_len = self.mem_bank_len  # 4
         track_instances.mem_bank = torch.zeros(
             (len(track_instances), mem_bank_len, dim // 2),
             dtype=torch.float32, device=device)
@@ -723,13 +727,13 @@ class ViP3D(MVXTwoStageDetector):
         '''
 
         # velo update:
-        active_inst = track_instances[track_instances.obj_idxes >= 0]
-        other_inst = track_instances[track_instances.obj_idxes < 0]
+        active_inst = track_instances[track_instances.obj_idxes >= 0]  # 0 when init
+        other_inst = track_instances[track_instances.obj_idxes < 0]  # 300 when init
 
         if l2g_r2 is not None and len(active_inst) > 0 and l2g_r1 is not None:
-            ref_pts = active_inst.ref_pts
-            velo = active_inst.pred_boxes[:, -2:]
-            ref_pts = self.velo_update(
+            ref_pts = active_inst.ref_pts  # 参考位置 [300, 3]
+            velo = active_inst.pred_boxes[:, -2:]  # 速度 [300, 2]
+            ref_pts = self.velo_update(  # 更新参考位置 # TODO
                 ref_pts, velo, l2g_r1, l2g_t1, l2g_r2, l2g_t2,
                 time_delta=time_delta)
             active_inst.ref_pts = ref_pts
@@ -739,42 +743,42 @@ class ViP3D(MVXTwoStageDetector):
             B, num_cam, _, H, W = img.shape
         except Exception:
             assert False
-        B, num_cam, _, H, W = img.shape
+        B, num_cam, _, H, W = img.shape  # TODO： not elegant
 
         """
-        # what does it do? img_feats = [a.clone() for a in img_feats]
+        # what does it do? img_feats = [a.clone() for a in img_feats] hty: me too has the same question
         """
         if True:
             img_feats, radar_feats, pts_feats = self.extract_feat(
                 points, img=img, radar=radar, img_metas=img_metas)
-            img_feats = [a.clone() for a in img_feats]
+            img_feats = [a.clone() for a in img_feats] # 1 6 256 116*200 58*100 29*50 15*25
 
             # output_classes: [num_dec, B, num_query, num_classes]
             # query_feats: [B, num_query, embed_dim]
-            ref_box_sizes = torch.cat(
-                [track_instances.pred_boxes[:, 2:4],
-                 track_instances.pred_boxes[:, 5:6]], dim=1)
-
+            ref_box_sizes = torch.cat( # pred_boxes: x y z w l h sin cos vx vy (vz
+                [track_instances.pred_boxes[:, 2:4],  # z w ?
+                 track_instances.pred_boxes[:, 5:6]], dim=1)  # h
+            # TODO: check pts_bbox_head
             output_classes, output_coords, \
                 query_feats, last_ref_pts = self.pts_bbox_head(
                 img_feats, radar_feats, track_instances.query,
-                track_instances.ref_pts, ref_box_sizes, img_metas, )
-
+                track_instances.ref_pts, ref_box_sizes, img_metas, )  # output 6 1 300 7=class 10=coords
+            # query_feats  1 300 256 last_ref_pts 1 300 3
         if self.add_branch:
-            self.update_history_img_list(img_metas, img, img_feats)
+            self.update_history_img_list(img_metas, img, img_feats)  # img_feats queue of size 4
 
-        out = {'pred_logits': output_classes[-1],
-               'pred_boxes': output_coords[-1],
+        out = {'pred_logits': output_classes[-1],  # not used, 1 300 7
+               'pred_boxes': output_coords[-1],  # 6 是 transformer 层数还是 视角？
                'ref_pts': last_ref_pts}
 
         # TODO: Why no max?
-        track_scores = output_classes[-1, 0, :].sigmoid().max(dim=-1).values
+        track_scores = output_classes[-1, 0, :].sigmoid().max(dim=-1).values  # softmax on last dim, 300
         # track_scores = output_classes[-1, 0, :, 0].sigmoid()
 
         # Step-1 Update track instances with current prediction
         # [nb_dec, bs, num_query, xxx]
 
-        # each track will be assigned an unique global id by the track base.
+        # each track will be assigned an unique global id by the track base. # where ? how to access ?
         track_instances.scores = track_scores
         # track_instances.track_scores = track_scores  # [300]
         track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
@@ -833,23 +837,24 @@ class ViP3D(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-        # [3, 3]
+        # [3, 3] current pos
         l2g_r_mat = l2g_r_mat[0][0]
         # change to [1, 3]
-        l2g_t = l2g_t[0].unsqueeze(dim=1)[0]
+        l2g_t = l2g_t[0].unsqueeze(dim=1)[0]  # lidar to global
 
         bs = img.size(0)
-        num_frame = img.size(1)
+        num_frame = img.size(1)  # 1
 
         timestamp = timestamp[0]
         device = img.device
 
         # track_instances of last frame
-        if self.test_track_instances is None:
+        if self.test_track_instances is None:  # track agent 初始化
             if True:
                 track_instances = self._generate_empty_tracks()
                 self.test_track_instances = track_instances
             self.timestamp = timestamp[0]
+            # avoid repeated generation of empty tracks
 
         new_query = False
         no_metric_now = False
@@ -871,23 +876,25 @@ class ViP3D(MVXTwoStageDetector):
                 if True:
                     track_instances = self.test_track_instances
                 time_delta = timestamp[0] - self.timestamp
-                l2g_r1 = self.l2g_r_mat
+                l2g_r1 = self.l2g_r_mat  # last state (历史)
                 l2g_t1 = self.l2g_t
-                l2g_r2 = l2g_r_mat
+                l2g_r2 = l2g_r_mat  # current state (中间变量)
                 l2g_t2 = l2g_t
-        self.timestamp = timestamp[-1]
+        self.timestamp = timestamp[-1]  # 0.5 s
         self.l2g_r_mat = l2g_r_mat
         self.l2g_t = l2g_t
 
         # for bs 1;
-        lidar2img = img_metas[0]['lidar2img']  # [T, num_cam]
+        lidar2img = img_metas[0]['lidar2img']  # [B, T=1, num_cam=6, mat=4x4]  # extrinsic
         for i in range(num_frame):
-            points_single = [p_[i] for p_ in points]
-            img_single = torch.stack([img_[i] for img_ in img], dim=0)
-            radar_single = torch.stack([radar_[i] for radar_ in radar], dim=0)
+            points_single = [p_[i] for p_ in points]  # B=1, N=34752, C=5
+            img_single = torch.stack([img_[i] for img_ in img], dim=0)  # B=1 V=6 C=3 H=928 W=1600
+            radar_single = torch.stack([radar_[i] for radar_ in radar], dim=0)  # B 100 14
 
             img_metas_single = deepcopy(img_metas)
             img_metas_single[0]['lidar2img'] = lidar2img[i]
+            # dict_keys(['filename', 'ori_shape', 'img_shape', 'lidar2img', 'pad_shape', 'scale_factor', 'box_mode_3d',
+            #            'box_type_3d', 'img_norm_cfg', 'sample_idx', 'pts_filename'])
 
             track_instances = self._inference_single(points_single, img_single,
                                                      radar_single,
@@ -895,7 +902,7 @@ class ViP3D(MVXTwoStageDetector):
                                                      track_instances,
                                                      l2g_r1, l2g_t1, l2g_r2, l2g_t2,
                                                      time_delta,
-                                                     gt_bboxes_3d=predictor_utils.tensors_tracking_to_detection(gt_bboxes_3d, i),
+                                                     gt_bboxes_3d=predictor_utils.tensors_tracking_to_detection(gt_bboxes_3d, i),  # None for test
                                                      gt_labels_3d=predictor_utils.tensors_tracking_to_detection(gt_labels_3d, i))
 
             if True:
@@ -903,8 +910,8 @@ class ViP3D(MVXTwoStageDetector):
 
         # why again? select active has been performed in forward of qim.py
         active_instances = self.query_interact._select_active_tracks(
-            dict(track_instances=track_instances))
-        self.test_track_instances = track_instances
+            dict(track_instances=track_instances))  # len=3 不知道为什么 加了 empty 再去掉
+        self.test_track_instances = track_instances  # len
 
         results = self._active_instances2results(active_instances, img_metas)
 

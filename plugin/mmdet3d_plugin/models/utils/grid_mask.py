@@ -68,6 +68,9 @@ class Grid(object):
 
 
 class GridMask(nn.Module):
+    # image augmentation:  The grid mask operation randomly selects a grid of squares in the input image and
+    # sets their values to zero, effectively "masking" them out.
+
     def __init__(self, use_h, use_w, rotate=1, offset=False, ratio=0.5, mode=0, prob=1.):
         super(GridMask, self).__init__()
         self.use_h = use_h
