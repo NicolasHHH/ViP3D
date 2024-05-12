@@ -7,6 +7,8 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
+# 处理网络输出的预测结果result_nusc.json
+# 和预测真值 nuscenes_prediction_infos_val.json 进行对比从而评估预测结果  0510
 
 class cfg:
     pred_traj_num = 6
@@ -16,6 +18,7 @@ class cfg:
     miss_rate_threshold = 2.0
     false_positive_penalty_coefficient = 0.5
 
+# 如何 load agents ？
 
 class GTAgent:
     def __init__(self,
@@ -23,9 +26,9 @@ class GTAgent:
                  future_traj: np.ndarray = np.zeros((cfg.future_frame_num, 2)),
                  future_traj_is_valid: np.ndarray = np.zeros(cfg.future_frame_num, dtype=np.int)
                  ):
-        self.translation = translation.copy()
-        self.future_traj = future_traj.copy()
-        self.future_traj_is_valid = future_traj_is_valid.copy()
+        self.translation = translation.copy()  # global offset
+        self.future_traj = future_traj.copy()  # local displacement
+        self.future_traj_is_valid = future_traj_is_valid.copy()  # mask 在什么情况下invalid ？
 
 
 class PredAgent:
@@ -74,9 +77,9 @@ class Metric:
 
 class PredictionMetrics:
     def __init__(self):
-        self.minADE = Metric()
-        self.minFDE = Metric()
-        self.MR = Metric()
+        self.minADE = Metric()  # average displacement error
+        self.minFDE = Metric()  # final displacement error
+        self.MR = Metric()  # miss rate
         self.matched = Metric()
         self.unmatched = Metric()
         self.matched_and_prediction_hit = Metric()
@@ -89,7 +92,7 @@ class PredictionMetrics:
 
         EPA = (matched_and_prediction_hit - unmatched * cfg.false_positive_penalty_coefficient) / gt_agent_num
 
-        EPA = max(EPA, 0.0)
+        EPA = max(EPA, 0.0)  # Novel Metric
 
         return dict(
             minADE=self.minADE.get_mean(),
@@ -100,22 +103,35 @@ class PredictionMetrics:
 
 
 def get_distances(point, points):
-    assert point.ndim == 1 and points.ndim == 2
+    # 计算point 到 points 中每个点的距禋
+    assert point.ndim == 1 and points.ndim == 2  # ndim returns the number of dimensions of the array
     return np.sqrt(np.square(points[:, 0] - point[0]) + np.square(points[:, 1] - point[1]))
 
 
 def get_argmin_trajectory(future_traj, future_traj_is_valid, pred_future_trajs):
+    """
+    从预测的轨迹中找到和真实轨迹最接近的轨迹
+    Args:
+        future_traj: [gt] 未来轨迹 future_frame_num, 2
+        future_traj_is_valid: [gt] 未来轨迹mask
+        pred_future_trajs: [pred] 预测的未来轨迹 pred_traj_num, future_frame_num, 2
+
+    Returns:
+        argmin: 最接近的轨迹的索引
+        minADE: 平均位移误差
+        minFDE: 最终位移误差
+    """
     if future_traj_is_valid.sum() == 0:
         return None, None, None
 
-    delta: np.ndarray = pred_future_trajs - future_traj[np.newaxis, :]
-    assert delta.shape == (cfg.pred_traj_num, cfg.future_frame_num, 2)
+    delta: np.ndarray = pred_future_trajs - future_traj[np.newaxis, :]  # repeat
+    assert delta.shape == (cfg.pred_traj_num, cfg.future_frame_num, 2)  # 6, 12, 2
 
-    delta = np.sqrt((delta * delta).sum(-1))
-    assert delta.shape == (cfg.pred_traj_num, cfg.future_frame_num)
+    delta = np.sqrt((delta * delta).sum(-1))  # 欧式距离
+    assert delta.shape == (cfg.pred_traj_num, cfg.future_frame_num)  # 6, 12
 
     if future_traj_is_valid[-1]:
-        minFDE = delta[:, -1].min()
+        minFDE = delta[:, -1].min()  # 6 1 -> 1
     else:
         minFDE = None
 
@@ -130,13 +146,14 @@ def get_argmin_trajectory(future_traj, future_traj_is_valid, pred_future_trajs):
 
 
 def get_gt_agents(prediction_infos, index):
+    # { key : n x value } -> n x { key : value }
     idx_2_gt_agent = {}
 
     for i in range(index, index + 1 + cfg.future_frame_num):
         if i >= len(prediction_infos):
             break
 
-        info = prediction_infos[i]
+        info = prediction_infos[i]  # 步长为1 采样长度为13
 
         instance_inds = np.array(info['instance_inds'], dtype=np.int)
         gt_bboxes_3d = np.array(info['gt_bboxes_3d'])
@@ -146,7 +163,7 @@ def get_gt_agents(prediction_infos, index):
 
         for box_idx, instance_idx in enumerate(instance_inds):
             assert instance_idx != -1
-            if i == index:
+            if i == index:  # 起手
                 assert instance_idx not in idx_2_gt_agent
                 idx_2_gt_agent[instance_idx] = GTAgent()
 
@@ -156,21 +173,19 @@ def get_gt_agents(prediction_infos, index):
                 xy = gt_bboxes_3d[box_idx][:2]
 
                 if i == index:
-                    gt_prediction_box.translation[:] = xy
+                    gt_prediction_box.translation[:] = xy  # 对象赋值
                 else:
                     gt_prediction_box.future_traj[i - index - 1] = xy
-                    gt_prediction_box.future_traj_is_valid[i - index - 1] = 1
+                    gt_prediction_box.future_traj_is_valid[i - index - 1] = 1  # mask
 
     gt_agents = [value for key, value in idx_2_gt_agent.items()]
     return gt_agents
 
 
 class PredictionEval:
-    def __init__(self,
-                 result_path: str = None,
-                 output_dir: str = None,
-                 prediction_infos_path: str = None):
+    def __init__(self, result_path: str = None, output_dir: str = None, prediction_infos_path: str = None):
         """
+        从json文件中读取预测结果和真值，计算评估指标
         Parameters
         ----------
         :param result_path: Path of the JSON result file.
