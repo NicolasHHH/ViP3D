@@ -70,7 +70,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
         self.activate = build_activation_layer(self.act_cfg)
         self.positional_encoding = build_positional_encoding(
             positional_encoding)
-        self.transformer = build_transformer(transformer) # Detr3DCamTrackTransformer
+        self.transformer = build_transformer(transformer)  # Detr3DCamTrackTransformer
         self.embed_dims = self.transformer.embed_dims
         self.num_feature_levels = num_feature_levels
         self.num_cams = num_cams
@@ -123,7 +123,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
         self.velo_branches = _get_clones(velo_branch, num_pred)
 
         self.level_embeds = nn.Parameter(
-            torch.Tensor(self.num_feature_levels, self.embed_dims))
+            torch.Tensor(self.num_feature_levels, self.embed_dims))  # 4, 256
         self.cam_embeds = nn.Parameter(
             torch.Tensor(self.num_cams, self.embed_dims))
 
@@ -150,15 +150,13 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
             multi-level multi-view (tuple[Tensor]): List of Features from the upstream
                 network, each is a 5D-tensor with shape
                 (B, N, C, H, W). # 4 B=1 V=6 256 116x200 / 58x100 / 29 50 / 15 25
-            radar_feats (Tensor) : radar features of shape (B, N, C)
+            radar_feats (Tensor) : radar features of shape (B, N, C)  # B=1 100 35
             query_embeds (Tensor):  pos_embed and feature for querys of shape
-                (num_query, embed_dim*2)  # B=1 100 35
+                (num_query, embed_dim*2)  # 300 256*2
             ref_points (Tensor):  3d reference points associated with each query
-                shape (num_query, 3)
-                value is in inevrse sigmoid space
+                shape (num_query, 3) in inverse sigmoid space
             ref_size (Tensor): the size(bbox size) associated with each query
-                shape (num_query, 3)
-                value in log space. 
+                shape (num_query, 3) in log space.
         Returns:
             输出 num_dec_layers 个分类和回归分支的预测、最后一层的query特征和参考点
             all_cls_scores (Tensor): Outputs from the classification head, \
@@ -178,15 +176,15 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
             img_masks = mlvl_feats[0].new_ones(
                 (batch_size, input_img_h, input_img_w))
             for img_id in range(batch_size):
-                img_h, img_w, _ = img_metas[img_id]['img_shape'][0][0]  # h = 900 w = 1600
+                img_h, img_w, _ = img_metas[img_id]['img_shape'][0][0]  # pad h = 900 w = 1600
                 img_masks[img_id, :img_h, :img_w] = 0
 
             for i, feat in enumerate(mlvl_feats):
                 B, N, C, H, W = feat.size()
                 mlvl_masks = F.interpolate(
-                    img_masks[None], size=feat.shape[-2:]).to(torch.bool).squeeze(0)
+                    img_masks[None], size=feat.shape[-2:]).to(torch.bool).squeeze(0)  # resize padding
                 # [B, embed_dim, H, W]
-                pos_enc = self.positional_encoding(mlvl_masks)
+                pos_enc = self.positional_encoding(mlvl_masks)  # type='SinePositionalEncoding', 128
                 pos_enc = pos_enc.unsqueeze(dim=1).repeat(1, N, 1, 1, 1)
                 # [B, N, embed_dim, H, W]
                 lvl_enc = self.level_embeds[i].view(1, 1, -1, 1, 1)
@@ -201,7 +199,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
         # hs: features: (num_dec_layers, num_query, bs, embed_dims)
         # init_reference: (1, bs, num_query, 3)
         # inter_references: (num_dec_layers-1, bs, num_query, 3)
-        hs, inter_references, inter_box_sizes = self.transformer(
+        hs, inter_references, inter_box_sizes = self.transformer(  # Detr3DCamTrackTransformer
             mlvl_feats,
             query_embeds,
             ref_points,

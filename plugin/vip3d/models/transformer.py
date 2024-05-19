@@ -91,8 +91,7 @@ class Detr3DCamTransformerPlus(BaseModule):
                 value is in inverse sigmoid space
             reg_branches (obj:`nn.ModuleList`): Regression heads for
                 feature maps from each decoder layer. Only would
-                be passed when
-                `with_box_refine` is True. Default to None.
+                be passed when `with_box_refine` is True. Default to None.
 
         Returns:
             tuple[Tensor]: results of decoder containing the following tensor.
@@ -186,21 +185,11 @@ class Detr3DCamTrackTransformer(BaseModule):
                 **kwargs):
         """Forward function for `Transformer`.
         Args:
-            mlvl_feats (list(Tensor)): Input queries from
-                different level. Each element has shape
-                [bs, embed_dims, h, w].
-            query_embed (Tensor): The query embedding for decoder,
-                with shape [num_query, 2*embed_dim], can be splitted into
-                query_feat and query_positional_encoding.
-            reference_points (Tensor): The corresponding 3d ref points
-                for the query with shape (num_query, 3)
-                value is in inverse sigmoid space
-            ref_size (Tensor): the wlh(bbox size) associated with each query
-                shape (num_query, 3)
-                value in log space. 
-            reg_branches (obj:`nn.ModuleList`): Regression heads for
-                feature maps from each decoder layer. Only would
-                be passed when
+            mlvl_feats (list(Tensor)): lvl=4 * [bs, num_cams, embed_dims, h, w].
+            query_embed (Tensor): [num_query, 2*embed_dim] = feat : pos
+            reference_points (Tensor): 3d ref points with shape (num_query, 3) in inverse sigmoid space
+            ref_size (Tensor): the wlh(bbox size) associated  (num_query, 3) in log space.
+            reg_branches (obj:`nn.ModuleList`): Regression heads for feature maps from each decoder layer.
                 
         Returns:
             tuple[Tensor]: results of decoder containing the following tensor.
@@ -221,7 +210,7 @@ class Detr3DCamTrackTransformer(BaseModule):
         reference_points = reference_points.unsqueeze(dim=0).expand(bs, -1, -1)
         ref_size = ref_size.unsqueeze(dim=0).expand(bs, -1, -1)
 
-        if self.training and self.reference_points_aug:
+        if self.training and self.reference_points_aug:  # False for test
             reference_points = reference_points + torch.randn_like(reference_points)
         reference_points = reference_points.sigmoid()
         # decoder
@@ -293,7 +282,7 @@ class Detr3DCamTrackPlusTransformerDecoder(TransformerLayerSequence):
                 *args,
                 reference_points=reference_points_input,
                 ref_size=ref_size,
-                **kwargs)
+                **kwargs)  # torch.Size([1，300, 256])
             output = output.permute(1, 0, 2)
 
             if reg_branches is not None:

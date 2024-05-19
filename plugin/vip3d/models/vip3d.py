@@ -169,11 +169,11 @@ class ViP3D(MVXTwoStageDetector):
 
         self.radar_encoder = build_radar_encoder(radar_encoder)  # BN1d + Linear 13->32
 
-        self.do_pred = do_pred
-        self.relative_pred = relative_pred
+        self.do_pred = do_pred  # True
+        self.relative_pred = relative_pred  # True
 
-        self.add_branch = add_branch
-        self.add_branch_2 = add_branch_2
+        self.add_branch = add_branch  # True
+        self.add_branch_2 = add_branch_2  # False
         if self.add_branch:
             from mmcv.utils import build_from_cfg
             from mmcv.cnn.bricks.registry import (TRANSFORMER_LAYER)
@@ -204,7 +204,7 @@ class ViP3D(MVXTwoStageDetector):
             ref_pts (Tensor): (num_query, 3).  in inevrse sigmoid space
         '''
         # print(l2g_r1.type(), l2g_t1.type(), ref_pts.type())
-
+        # time 为零就不更新， 那 > 1.0 ?
         if time_delta > 1. or time_delta < 0.:
             time_delta = torch.tensor(0., device=time_delta.device, dtype=time_delta.dtype)
 
@@ -212,9 +212,11 @@ class ViP3D(MVXTwoStageDetector):
         time_delta = time_delta.type(torch.float)
         num_query = ref_pts.size(0)
         velo_pad_ = velocity.new_zeros((num_query, 1))
-        velo_pad = torch.cat((velocity, velo_pad_), dim=-1)
+        velo_pad = torch.cat((velocity, velo_pad_), dim=-1)  # pad z-axis with zeros
 
         reference_points = ref_pts.sigmoid().clone()
+
+        # unnormalize
         pc_range = self.pc_range
         reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
         reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
@@ -223,9 +225,10 @@ class ViP3D(MVXTwoStageDetector):
         # Update first: according to query velocity
         reference_points = reference_points + velo_pad * time_delta
 
-        ref_pts = reference_points @ l2g_r1.T + l2g_t1
-        ref_pts = (ref_pts - l2g_t2) @ torch.linalg.inv(l2g_r2).T.type(torch.float)
+        ref_pts = reference_points @ l2g_r1.T + l2g_t1  # # lidar_t1 -> global
+        ref_pts = (ref_pts - l2g_t2) @ torch.linalg.inv(l2g_r2).T.type(torch.float)  # global -> lidar_curr
 
+        # normalize
         ref_pts[..., 0:1] = (ref_pts[..., 0:1] - pc_range[0]) / (pc_range[3] - pc_range[0])
         ref_pts[..., 1:2] = (ref_pts[..., 1:2] - pc_range[1]) / (pc_range[4] - pc_range[1])
         ref_pts[..., 2:3] = (ref_pts[..., 2:3] - pc_range[2]) / (pc_range[5] - pc_range[2])
@@ -324,6 +327,8 @@ class ViP3D(MVXTwoStageDetector):
 
         pred_boxes_init[..., 2:4] = box_sizes[..., 0:2]  # w l
         pred_boxes_init[..., 5:6] = box_sizes[..., 2:3]  # h
+        # xy, wl, z, h, sin, cos, vx, vy, vz
+        track_instances.pred_boxes = pred_boxes_init
 
         if True:
             # 向instances中添加query 、 ref_points 字段
@@ -345,8 +350,6 @@ class ViP3D(MVXTwoStageDetector):
             (len(track_instances),), dtype=torch.float, device=device)
         track_instances.track_scores = torch.zeros(
             (len(track_instances),), dtype=torch.float, device=device)
-        # xy, wl, z, h, sin, cos, vx, vy, vz
-        track_instances.pred_boxes = pred_boxes_init
 
         track_instances.pred_logits = torch.zeros(
             (len(track_instances), self.num_classes),
@@ -755,8 +758,8 @@ class ViP3D(MVXTwoStageDetector):
 
             # output_classes: [num_dec, B, num_query, num_classes]
             # query_feats: [B, num_query, embed_dim]
-            ref_box_sizes = torch.cat( # pred_boxes: x y z w l h sin cos vx vy (vz
-                [track_instances.pred_boxes[:, 2:4],  # z w ?
+            ref_box_sizes = torch.cat( # pred_boxes: x y  w l ? h sin cos vx vy (vz
+                [track_instances.pred_boxes[:, 2:4],  # w l
                  track_instances.pred_boxes[:, 5:6]], dim=1)  # h
             # TODO: check pts_bbox_head
             output_classes, output_coords, \
