@@ -87,14 +87,14 @@ class Detr3DCrossAtten(BaseModule):
                 'the dimension of each attention head a power of 2 '
                 'which is more efficient in our CUDA implementation.')
 
-        self.im2col_step = im2col_step
+        self.im2col_step = im2col_step  # 64
         self.embed_dims = embed_dims
         self.num_levels = num_levels
         self.num_heads = num_heads
         self.num_points = num_points
         self.num_cams = num_cams
         self.attention_weights = nn.Linear(embed_dims,
-                                           num_cams * num_levels * num_points)
+                                           num_cams * num_levels * num_points)  # 6 4 1
 
         self.output_proj = nn.Linear(embed_dims, embed_dims)
 
@@ -128,33 +128,21 @@ class Detr3DCrossAtten(BaseModule):
                 **kwargs):
         """Forward Function of Detr3DCrossAtten.
         Args:
-            query (Tensor): Query of Transformer with shape
-                (num_query, bs, embed_dims).
-            key (Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
-            value (Tensor): The value tensor with shape
-                `(num_key, bs, embed_dims)`. (B, N, C, H, W)
+            query (Tensor): Query of Transformer with shape (num_query, bs, embed_dims).
+            key (Tensor): The key tensor with shape (num_key, bs, embed_dims).  None
+            value (Tensor): The value tensor with shape (num_key, bs, embed_dims)`. List[(B, N, C, H, W)]
             residual (Tensor): The tensor used for addition, with the
                 same shape as `x`. Default None. If None, `x` will be used.
-            query_pos (Tensor): The positional encoding for `query`.
-                Default: None.
-            key_pos (Tensor): The positional encoding for `key`. Default
-                None.
-            reference_points (Tensor):  The noDetr3DCamTrackTransformerrmalized reference
-                points with shape (bs, num_query, 4),
-                all elements is range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area.
-                or (N, Length_{query}, num_levels, 4), add
-                additional two dimensions is (w, h) to
-                form reference boxes.
-            key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_key].
-            spatial_shapes (Tensor): Spatial shape of features in
-                different level. With shape  (num_levels, 2),
+            query_pos (Tensor): The positional encoding for `query`. Default: None.
+            key_pos (Tensor): The positional encoding for `key`. Default None.
+            reference_points (Tensor):  The normalized reference points with shape (bs, num_query, 3) #!4,
+                all elements is range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area.
+                or (N, Length_{query}, num_levels, 4), add additional two dimensions is (w, h) to form reference boxes.
+            key_padding_mask (Tensor): ByteTensor for `query`, with shape [bs, num_key].  None
+            spatial_shapes (Tensor): Spatial shape of features in different level. With shape  (num_levels, 2),
                 last dimension represent (h, w).
-            level_start_index (Tensor): The start index of each level.
-                A tensor has shape (num_levels) and can be represented
-                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
+            level_start_index (Tensor): The start index of each level. A tensor has shape (num_levels) and
+                can be represented as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
         Returns:
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
@@ -171,21 +159,21 @@ class Detr3DCrossAtten(BaseModule):
 
         # change to (bs, num_query, embed_dims)
         query = query.permute(1, 0, 2)
-
+        # b 300
         bs, num_query, _ = query.size()
-
+        # b 1 300 6 1 4
         attention_weights = self.attention_weights(query).view(
             bs, 1, num_query, self.num_cams, self.num_points, self.num_levels)
 
         reference_points_3d, output, mask = feature_sampling(
             value, reference_points, self.pc_range, kwargs['img_metas'])
-        output = torch.nan_to_num(output)
-        mask = torch.nan_to_num(mask)
+        output = torch.nan_to_num(output)   # sampled features  [b, 256, 300, V, 1, L]
+        mask = torch.nan_to_num(mask)      # mask [1, 1, 300, V, 1, 1]
 
         attention_weights = attention_weights.sigmoid() * mask
-        output = output * attention_weights
+        output = output * attention_weights  # [b, 256, 300, V, 1, L]
         output = output.sum(-1).sum(-1).sum(-1)
-        output = output.permute(2, 0, 1)
+        output = output.permute(2, 0, 1)  # [300, b, 256]
 
         output = self.output_proj(output)
         # (num_query, bs, embed_dims)
@@ -435,45 +423,45 @@ class Detr3DCamRadarCrossAtten(BaseModule):
 def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
     lidar2img = []
     for img_meta in img_metas:
-        lidar2img.append(img_meta['lidar2img'])
-    lidar2img = np.asarray(lidar2img)
-    lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
+        lidar2img.append(img_meta['lidar2img'])  # len = 1 = bs?
+    lidar2img = np.asarray(lidar2img)  # (B, V, 4, 4)
+    lidar2img = reference_points.new_tensor(lidar2img)  # (B, V, 4, 4)  # eq to .to(dtype).to(device)
     reference_points = reference_points.clone()
     reference_points_3d = reference_points.clone()
-    reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+    reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]   # denormalize
     reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
     reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
-    # reference_points (B, num_queries, 4)
+    # reference_points (B, num_queries, 4), homogeneous coordinates
     reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
     B, num_query = reference_points.size()[:2]
-    num_cam = lidar2img.size(1)
+    num_cam = lidar2img.size(1)  # B V Q 4 1
     reference_points = reference_points.view(B, 1, num_query, 4).repeat(1, num_cam, 1, 1).unsqueeze(-1)
-    lidar2img = lidar2img.view(B, num_cam, 1, 4, 4).repeat(1, 1, num_query, 1, 1)
-    reference_points_cam = torch.matmul(lidar2img, reference_points).squeeze(-1)
+    lidar2img = lidar2img.view(B, num_cam, 1, 4, 4).repeat(1, 1, num_query, 1, 1)  # B V Q 4 4
+    reference_points_cam = torch.matmul(lidar2img, reference_points).squeeze(-1)  # B V Q 4
     eps = 1e-5
-    mask = (reference_points_cam[..., 2:3] > eps)
+    mask = (reference_points_cam[..., 2:3] > eps)  # FRONT
     reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
         reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
-    reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][0][1]
-    reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0][0]
-    reference_points_cam = (reference_points_cam - 0.5) * 2
+    reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][0][1]  # 1600
+    reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0][0]  # 900
+    reference_points_cam = (reference_points_cam - 0.5) * 2  # 1 6 300 2
     mask = (mask & (reference_points_cam[..., 0:1] > -1.0)
             & (reference_points_cam[..., 0:1] < 1.0)
             & (reference_points_cam[..., 1:2] > -1.0)
             & (reference_points_cam[..., 1:2] < 1.0))
-    mask = mask.view(B, num_cam, 1, num_query, 1, 1).permute(0, 2, 3, 1, 4, 5)
+    mask = mask.view(B, num_cam, 1, num_query, 1, 1).permute(0, 2, 3, 1, 4, 5)  # B 1 Q V 1 1
     mask = torch.nan_to_num(mask)
     sampled_feats = []
     for lvl, feat in enumerate(mlvl_feats):
         B, N, C, H, W = feat.size()
-        feat = feat.view(B * N, C, H, W)
-        reference_points_cam_lvl = reference_points_cam.view(B * N, num_query, 1, 2)
-        sampled_feat = F.grid_sample(feat, reference_points_cam_lvl)
+        feat = feat.view(B * N, C, H, W)  # 6 C H W
+        reference_points_cam_lvl = reference_points_cam.view(B * N, num_query, 1, 2)  # 6 300 1 2
+        sampled_feat = F.grid_sample(feat, reference_points_cam_lvl)  # 6 C 300 1
         sampled_feat = sampled_feat.view(B, N, C, num_query, 1).permute(0, 2, 3, 1, 4)
         sampled_feats.append(sampled_feat)
-    sampled_feats = torch.stack(sampled_feats, -1)
+    sampled_feats = torch.stack(sampled_feats, -1)  # B C Q V 1 Lvl
     sampled_feats = sampled_feats.view(B, C, num_query, num_cam, 1, len(mlvl_feats))
-    return reference_points_3d, sampled_feats, mask
+    return reference_points_3d, sampled_feats, mask  # 1 300 3; ; 1, 1, 300, 6, 1, 1
 
 
 @ATTENTION.register_module()

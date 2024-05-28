@@ -207,7 +207,7 @@ out = {'pred_logits': output_classes[-1],  # not used, 1 300 7
 ```
 
 ### 'vip3d/models/head_plus_raw.py' :: `DeformableDETR3DCamHeadTrackPlusRaw`::forward()  (13)
-给特征图添加 size padding 并 叠加位置编码
+- 给特征图添加 size padding 并 叠加位置编码
 - 交叉注意力
 ```python
     def forward(self, mlvl_feats, radar_feats,
@@ -333,45 +333,147 @@ out = {'pred_logits': output_classes[-1],  # not used, 1 300 7
                 ref_size=ref_size,
                 **kwargs)
             output = output.permute(1, 0, 2)
+```
 
-            if reg_branches is not None:
-                tmp = reg_branches[lid](output)
+`vip3d/models/attention_detr3d.py` Detr3DCrossAtten::forward()  (15)
 
-                ref_pts_update = torch.cat(
-                    [
-                        tmp[..., :2],
-                        tmp[..., 4:5],
-                    ], dim=-1
-                )
-                ref_size_update = torch.cat(
-                    [
-                        tmp[..., 2:4],
-                        tmp[..., 5:6]
-                    ], dim=-1
-                )
-                assert reference_points.shape[-1] == 3
+```python
+    def forward(self,
+                query,
+                key,
+                value,
+                residual=None,
+                query_pos=None,
+                key_padding_mask=None,
+                reference_points=None,
+                spatial_shapes=None,
+                level_start_index=None,
+                **kwargs):
+        """Forward Function of Detr3DCrossAtten.
+        Args:
+            query (Tensor): Query of Transformer with shape (num_query, bs, embed_dims). 
+            key (Tensor): The key tensor with shape (num_key, bs, embed_dims).  None
+            value (Tensor): The value tensor with shape (num_key, bs, embed_dims)`. List[(B, N, C, H, W)]
+            residual (Tensor): The tensor used for addition, with the
+                same shape as `x`. Default None. If None, `x` will be used.
+            query_pos (Tensor): The positional encoding for `query`. Default: None.
+            key_pos (Tensor): The positional encoding for `key`. Default None.
+            reference_points (Tensor):  The normalized reference points with shape (bs, num_query, 3) #!4,
+                all elements is range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area.
+                or (N, Length_{query}, num_levels, 4), add additional two dimensions is (w, h) to form reference boxes.
+            key_padding_mask (Tensor): ByteTensor for `query`, with shape [bs, num_key].  None
+            spatial_shapes (Tensor): Spatial shape of features in different level. With shape  (num_levels, 2),
+                last dimension represent (h, w).
+            level_start_index (Tensor): The start index of each level. A tensor has shape (num_levels) and 
+                can be represented as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
+        Returns:
+             Tensor: forwarded results with shape [num_query, bs, embed_dims].
+        """
 
-                new_reference_points = ref_pts_update + \
-                                       inverse_sigmoid(reference_points)
-                new_reference_points = new_reference_points.sigmoid()
-                reference_points = new_reference_points.detach()
+        # change to (bs, num_query, embed_dims)
+        query = query.permute(1, 0, 2)
+        bs, num_query, _ = query.size()
+        # query -- FC(256, 24) --> (bs, num_query, cams*levels*points) 6 4 1
+        attention_weights = self.attention_weights(query).view(
+            bs, 1, num_query, self.num_cams, self.num_points, self.num_levels)
+        # 1 1 300 6 1 4
+        reference_points_3d, output, mask = feature_sampling(
+            value, reference_points, self.pc_range, kwargs['img_metas'])
+        
+        
+```
 
-                # add in log space
-                # ref_size = (ref_size.exp() + ref_size_update.exp()).log()
-                ref_size = ref_size + ref_size_update
-                if lid > 0:
-                    ref_size = ref_size.detach()
+`vip3d/models/attention_detr3d.py` feature_sampling()  (16)
+- 通过参考点采样特征: 把3d参考点通过img_metas::lidar2img变换投影到6个图像上，在对应位置采集特征
+```python
+def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
+    lidar2img = []
+    for img_meta in img_metas:
+        lidar2img.append(img_meta['lidar2img'])
+    lidar2img = np.asarray(lidar2img)
+    lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
+    reference_points = reference_points.clone()
+    reference_points_3d = reference_points.clone()
+    reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+    reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+    reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+    # reference_points (B, num_queries, 4)
+    reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
+    B, num_query = reference_points.size()[:2]
+    num_cam = lidar2img.size(1)
+    reference_points = reference_points.view(B, 1, num_query, 4).repeat(1, num_cam, 1, 1).unsqueeze(-1)
+    lidar2img = lidar2img.view(B, num_cam, 1, 4, 4).repeat(1, 1, num_query, 1, 1)
+    reference_points_cam = torch.matmul(lidar2img, reference_points).squeeze(-1)
+    eps = 1e-5
+    mask = (reference_points_cam[..., 2:3] > eps)
+    reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
+        reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
+    reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][0][1]
+    reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0][0]
+    reference_points_cam = (reference_points_cam - 0.5) * 2
+    mask = (mask & (reference_points_cam[..., 0:1] > -1.0)
+            & (reference_points_cam[..., 0:1] < 1.0)
+            & (reference_points_cam[..., 1:2] > -1.0)
+            & (reference_points_cam[..., 1:2] < 1.0))
+    mask = mask.view(B, num_cam, 1, num_query, 1, 1).permute(0, 2, 3, 1, 4, 5)
+    mask = torch.nan_to_num(mask)
+    sampled_feats = []
+    for lvl, feat in enumerate(mlvl_feats):
+        B, N, C, H, W = feat.size()
+        feat = feat.view(B * N, C, H, W)
+        reference_points_cam_lvl = reference_points_cam.view(B * N, num_query, 1, 2)
+        sampled_feat = F.grid_sample(feat, reference_points_cam_lvl)
+        sampled_feat = sampled_feat.view(B, N, C, num_query, 1).permute(0, 2, 3, 1, 4)
+        sampled_feats.append(sampled_feat)
+    sampled_feats = torch.stack(sampled_feats, -1)
+    sampled_feats = sampled_feats.view(B, C, num_query, num_cam, 1, len(mlvl_feats))
+    return reference_points_3d, sampled_feats, mask
+```
 
-            output = output.permute(1, 0, 2)
-            if self.return_intermediate:
-                intermediate.append(output)
-                intermediate_reference_points.append(reference_points)
-                intermediate_box_sizes.append(ref_size)
+`vip3d/models/attention_detr3d.py` Detr3DCrossAtten::forward()  (15)
+```python
+        output = torch.nan_to_num(output)
+        mask = torch.nan_to_num(mask)
 
-        if self.return_intermediate:
-            return torch.stack(intermediate), torch.stack(
+        attention_weights = attention_weights.sigmoid() * mask
+        output = output * attention_weights
+        output = output.sum(-1).sum(-1).sum(-1)
+        output = output.permute(2, 0, 1)
+
+        output = self.output_proj(output)
+        # (num_query, bs, embed_dims)
+        pos_feat = self.position_encoder(inverse_sigmoid(reference_points_3d)).permute(1, 0, 2)
+
+        return self.dropout(output) + inp_residual + pos_feat
+```
+
+`vip3d/models/transformer.py`::`Detr3DCamTrackPlusTransformerDecoder`::forward()  (14)
+- 逐层调用transformer decoder做交叉注意力解码
+- 过reg_branches
+```python
+if reg_branches is not None:
+    tmp = reg_branches[lid](output)
+    ref_pts_update = torch.cat([tmp[..., :2],tmp[..., 4:5],], dim=-1)
+    ref_size_update = torch.cat([tmp[..., 2:4], tmp[..., 5:6]], dim=-1)
+    assert reference_points.shape[-1] == 3
+    new_reference_points = ref_pts_update + inverse_sigmoid(reference_points)
+    new_reference_points = new_reference_points.sigmoid()
+    reference_points = new_reference_points.detach()
+
+    # ref_size = (ref_size.exp() + ref_size_update.exp()).log()
+    ref_size = ref_size + ref_size_update
+    if lid > 0:
+        ref_size = ref_size.detach()
+    output = output.permute(1, 0, 2)
+    if self.return_intermediate:
+        intermediate.append(output)
+        intermediate_reference_points.append(reference_points)
+        intermediate_box_sizes.append(ref_size)
+
+    if self.return_intermediate:
+        return torch.stack(intermediate), torch.stack(
                 intermediate_reference_points), \
                 torch.stack(intermediate_box_sizes)
 
-        return output, reference_points, ref_size
+    return output, reference_points, ref_size
 ```

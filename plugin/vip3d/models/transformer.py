@@ -276,7 +276,7 @@ class Detr3DCamTrackPlusTransformerDecoder(TransformerLayerSequence):
         intermediate_reference_points = []
         intermediate_box_sizes = []
         for lid, layer in enumerate(self.layers):
-            reference_points_input = reference_points
+            reference_points_input = reference_points  # 1 300 3
             output = layer(
                 output,
                 *args,
