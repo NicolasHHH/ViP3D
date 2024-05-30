@@ -216,7 +216,7 @@ class DeformableDETR3DCamHeadTrackPlusRaw(nn.Module):
 
         for lvl in range(hs.shape[0]):  # iterate on levels 0 - 5
             if lvl == 0:  # 300 3
-                reference = ref_points.sigmoid()
+                reference = ref_points.sigmoid()  # 300 3
                 ref_size_base = ref_size
             else:  # [6, 1, 300, 3]
                 reference = inter_references[lvl - 1]

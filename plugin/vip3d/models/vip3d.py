@@ -28,9 +28,9 @@ from ..structures import Instances
 
 class RuntimeTrackerBase(object):
     def __init__(self, score_thresh=None, filter_score_thresh=None, miss_tolerance=5):
-        self.score_thresh = score_thresh
-        self.filter_score_thresh = filter_score_thresh
-        self.miss_tolerance = miss_tolerance
+        self.score_thresh = score_thresh  # 0.4
+        self.filter_score_thresh = filter_score_thresh  # 0.35
+        self.miss_tolerance = miss_tolerance  # 丢失后保持id的帧数
         self.max_obj_id = 0
         self.link_track_id = False
         self.last_track_instances = None
@@ -43,7 +43,7 @@ class RuntimeTrackerBase(object):
         for i in range(len(track_instances)):
             if track_instances.obj_idxes[i] == -1 and track_instances.scores[i] >= self.score_thresh:
                 # new track
-                # print("track {} has score {}, assign obj_id {}".format(i, track_instances.scores[i], self.max_obj_id))
+                print("track {} has score {}, assign obj_id {}".format(i, track_instances.scores[i], self.max_obj_id))
 
                 if True:
                     track_instances.obj_idxes[i] = self.max_obj_id
@@ -782,13 +782,13 @@ class ViP3D(MVXTwoStageDetector):
         # [nb_dec, bs, num_query, xxx]
 
         # each track will be assigned an unique global id by the track base. # where ? how to access ?
-        track_instances.scores = track_scores
+        track_instances.scores = track_scores  # 300
         # track_instances.track_scores = track_scores  # [300]
-        track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
-        track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
+        track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls=7]
+        track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim=10]
         track_instances.output_embedding = query_feats[0]  # [300, feat_dim]
 
-        track_instances.ref_pts = last_ref_pts[0]
+        track_instances.ref_pts = last_ref_pts[0]  # [300, 3]
 
         self.track_base.update(track_instances)
         # self.track_base.update_fix_label(track_instances, old_class_scores)
@@ -913,7 +913,7 @@ class ViP3D(MVXTwoStageDetector):
 
         # why again? select active has been performed in forward of qim.py
         active_instances = self.query_interact._select_active_tracks(
-            dict(track_instances=track_instances))  # len=3 不知道为什么 加了 empty 再去掉
+            dict(track_instances=track_instances))  # 3+303 -> 3
         self.test_track_instances = track_instances  # len
 
         results = self._active_instances2results(active_instances, img_metas)

@@ -158,7 +158,7 @@ class Detr3DCrossAtten(BaseModule):
             query = query + query_pos
 
         # change to (bs, num_query, embed_dims)
-        query = query.permute(1, 0, 2)
+        query = query.permute(1, 0, 2)  # b 300 256
         # b 300
         bs, num_query, _ = query.size()
         # b 1 300 6 1 4
@@ -461,7 +461,7 @@ def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
         sampled_feats.append(sampled_feat)
     sampled_feats = torch.stack(sampled_feats, -1)  # B C Q V 1 Lvl
     sampled_feats = sampled_feats.view(B, C, num_query, num_cam, 1, len(mlvl_feats))
-    return reference_points_3d, sampled_feats, mask  # 1 300 3; ; 1, 1, 300, 6, 1, 1
+    return reference_points_3d, sampled_feats, mask  # 归一化参考点 1 300 3; 1 256 300 6 1 4; 1, 1, 300, 6, 1, 1
 
 
 @ATTENTION.register_module()

@@ -294,6 +294,8 @@ out = {'pred_logits': output_classes[-1],  # not used, 1 300 7
         return inter_states, inter_references, inter_box_sizes
 ```
 
+![mlvl_feats_max.png](mlvl_feats_max.png)
+
 
 `vip3d/models/transformer.py`::`Detr3DCamTrackPlusTransformerDecoder`::forward()
 - 逐层调用transformer decoder做交叉注意力解码
@@ -385,6 +387,7 @@ out = {'pred_logits': output_classes[-1],  # not used, 1 300 7
 
 `vip3d/models/attention_detr3d.py` feature_sampling()  (16)
 - 通过参考点采样特征: 把3d参考点通过img_metas::lidar2img变换投影到6个图像上，在对应位置采集特征
+- mask 输出参考点各个相机视野内的可见性
 ```python
 def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
     lidar2img = []
@@ -429,7 +432,7 @@ def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
     sampled_feats = sampled_feats.view(B, C, num_query, num_cam, 1, len(mlvl_feats))
     return reference_points_3d, sampled_feats, mask
 ```
-
+![ref_pts_3d.png](ref_pts_3d.png)
 `vip3d/models/attention_detr3d.py` Detr3DCrossAtten::forward()  (15)
 ```python
         output = torch.nan_to_num(output)
@@ -476,4 +479,181 @@ if reg_branches is not None:
                 torch.stack(intermediate_box_sizes)
 
     return output, reference_points, ref_size
+```
+
+'vip3d/models/head_plus_raw.py' :: `DeformableDETR3DCamHeadTrackPlusRaw`::forward()  (13)
+- 给特征图添加 size padding 并 叠加位置编码
+- 交叉注意力
+
+
+### `vip3d.py` :: `_inference_single`  (9)
+- 将输出结果赋给track_instances，更新track_base
+```python
+# TODO: Why no max?
+        track_scores = output_classes[-1, 0, :].sigmoid().max(dim=-1).values  # softmax on last dim, 300
+
+        # each track will be assigned an unique global id by the track base. # where ? how to access ?
+        track_instances.scores = track_scores
+        # track_instances.track_scores = track_scores  # [300]
+        track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
+        track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
+        track_instances.output_embedding = query_feats[0]  # [300, feat_dim]
+
+        track_instances.ref_pts = last_ref_pts[0]
+
+        self.track_base.update(track_instances)
+```
+
+### `vip3d.py` :: `RunTimeTrackerBase`  (17)
+- 应该是一个管理track_instances的类 
+```python
+# 类定义
+class RuntimeTrackerBase(object):
+    def __init__(self, score_thresh=None, filter_score_thresh=None, miss_tolerance=5):
+        self.score_thresh = score_thresh
+        self.filter_score_thresh = filter_score_thresh
+        self.miss_tolerance = miss_tolerance
+        self.max_obj_id = 0
+        self.link_track_id = False
+        self.last_track_instances = None
+
+# 管理track_instances
+    def update(self, track_instances):
+        track_instances.disappear_time[track_instances.scores >= self.score_thresh] = 0
+        for i in range(len(track_instances)):
+            if track_instances.obj_idxes[i] == -1 and track_instances.scores[i] >= self.score_thresh:
+                # new track
+                # print("track {} has score {}, assign obj_id {}".format(i, track_instances.scores[i], self.max_obj_id))
+
+                if True:
+                    track_instances.obj_idxes[i] = self.max_obj_id
+                    self.max_obj_id += 1
+            elif track_instances.obj_idxes[i] >= 0 and track_instances.scores[i] < self.filter_score_thresh:
+                # sleep time ++
+                track_instances.disappear_time[i] += 1
+                if track_instances.disappear_time[i] >= self.miss_tolerance:
+                    # mark deaded tracklets: Set the obj_id to -1.
+                    # TODO: remove it by following functions
+                    # Then this track will be removed by TrackEmbeddingLayer.
+                    track_instances.obj_idxes[i] = -1
+
+```
+track instance 状态机： 
+1. 如果当前状态为 -1 （未跟踪），且得分大于当前阈值，则打上编号 max_obj_id
+2. 如果当前状态为 被跟踪，但得分小于过滤阈值，则开始计时，并在一定时间后标记为 -1（丢失）
+
+### `vip3d.py` :: `_inference_single`  (9)
+- instance过memory_bank 和历史信息交互
+- 实际上调用了MemoryBank的forward方法
+```python
+        if self.memory_bank is not None:
+            track_instances = self.memory_bank(track_instances)
+        tmp = {}
+        tmp['track_instances'] = track_instances
+        out_track_instances = self.query_interact(tmp)
+        return out_track_instances
+```
+
+### `memory_bank.py` :: `forward`  (18)
+- temporal attention
+- 更新memory_bank
+```python
+    def forward(self, track_instances: Instances, update_bank=True) -> Instances:
+        track_instances = self._forward_temporal_attn(track_instances)
+        if update_bank:
+            self.update(track_instances)
+        return track_instances
+```
+
+### `memory_bank.py` :: `_forward_temporal_attn`  (19)
+- embed  (1, num_track, dim) 和 prev_embed (mem_len, num_track, dim) 通过temporal attention 交互
+```python
+    def _forward_temporal_attn(self, track_instances):
+
+        key_padding_mask = track_instances.mem_padding_mask  # padding是干什么的？ 如何定义？
+
+        valid_idxes = key_padding_mask[:, -1] == 0
+        embed = track_instances.output_embedding[valid_idxes]  # (n, 256)
+        # mem_bank 和 key_padding_mask 都是 (n, 4, 256) 关系？
+
+        if len(embed) > 0:
+            prev_embed = track_instances.mem_bank[valid_idxes]
+            key_padding_mask = key_padding_mask[valid_idxes]
+            embed2 = self.temporal_attn(
+                embed[None],  # (num_track, dim) to (1, num_track, dim)
+                prev_embed.transpose(0, 1),  # (num_track, mem_len, dim) to (mem_len, num_track, dim)
+                prev_embed.transpose(0, 1),
+                key_padding_mask=key_padding_mask,
+            )[0][0]
+
+            # ffn
+            embed = self.temporal_norm1(embed + embed2)
+            embed2 = self.temporal_fc2(F.relu(self.temporal_fc1(embed)))
+            embed = self.temporal_norm2(embed + embed2)
+            # reassign to update
+            track_instances.output_embedding = track_instances.output_embedding.clone()
+            track_instances.output_embedding[valid_idxes] = embed
+
+        return track_instances
+```
+
+`memory_bank.py` :: `update`  (20)
+- 更新memory_bank
+```python
+    def update(self, track_instances):
+        embed = track_instances.output_embedding[:, None]  # ( N, 1, 256)
+        scores = track_instances.scores
+        mem_padding_mask = track_instances.mem_padding_mask
+        device = embed.device
+
+        save_period = track_instances.save_period
+        if self.training:
+            saved_idxes = scores > 0
+        else:
+            saved_idxes = (save_period == 0) & (scores > self.save_thresh)
+            # saved_idxes = (save_period == 0)
+            save_period[save_period > 0] -= 1
+            save_period[saved_idxes] = self.save_period
+
+        saved_embed = embed[saved_idxes]
+        if len(saved_embed) > 0:
+            prev_embed = track_instances.mem_bank[saved_idxes]
+            save_embed = self.save_proj(saved_embed)
+            mem_padding_mask[saved_idxes] = torch.cat([mem_padding_mask[saved_idxes, 1:], torch.zeros((len(saved_embed), 1), dtype=torch.bool, device=device)], dim=1)
+            track_instances.mem_bank = track_instances.mem_bank.clone()
+            track_instances.mem_bank[saved_idxes] = torch.cat([prev_embed[:, 1:], save_embed], dim=1)
+```
+对于每一个instance 来说，如果还没开始计时 就从3开始倒计时。
+对所有instacne时间进行递减。
+更新mem padding mask，如果当前instance被保存，mem padding mask 从左边加0，右边去掉一个。
+save_embed 入 queue， queue pop。
+
+`qim.py` :: `query interact`  (21)
+
+```python
+    def forward(self, data) -> Instances:
+        active_track_instances = self._select_active_tracks(data)
+        active_track_instances = self._update_track_embedding(active_track_instances)
+        return active_track_instances
+```
+
+`vip3d.py`::`_inference_single` (9)
+- return updated track_instances
+```python
+    tmp = {}
+    tmp['track_instances'] = track_instances
+    out_track_instances = self.query_interact(tmp)
+    return out_track_instances
+```
+
+```python
+    if True:
+                track_instances = Instances.cat([track_instances, self._generate_empty_tracks()])
+
+        # why again? select active has been performed in forward of qim.py
+        active_instances = self.query_interact._select_active_tracks(
+            dict(track_instances=track_instances))  # 3+303 -> 3
+        self.test_track_instances = track_instances  # len
+
+        results = self._active_instances2results(active_instances, img_metas)
 ```

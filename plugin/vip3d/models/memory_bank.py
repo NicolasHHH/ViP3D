@@ -24,9 +24,9 @@ class MemoryBank(nn.Module):
                 nn.init.xavier_uniform_(p)
 
     def _build_layers(self, args, dim_in, hidden_dim, dim_out):
-        self.save_thresh = args['memory_bank_score_thresh']
+        self.save_thresh = args['memory_bank_score_thresh']  # 0.0
         self.save_period = 3
-        self.max_his_length = args['memory_bank_len']
+        self.max_his_length = args['memory_bank_len']  # 4
 
         self.save_proj = nn.Linear(dim_in, dim_in)
 
@@ -37,7 +37,7 @@ class MemoryBank(nn.Module):
         self.temporal_norm2 = nn.LayerNorm(dim_in)
 
     def update(self, track_instances):
-        embed = track_instances.output_embedding[:, None]  # ( N, 1, 256)
+        embed = track_instances.output_embedding[:, None]  # (N, 1, 256)
         scores = track_instances.scores
         mem_padding_mask = track_instances.mem_padding_mask
         device = embed.device
@@ -49,7 +49,7 @@ class MemoryBank(nn.Module):
             saved_idxes = (save_period == 0) & (scores > self.save_thresh)
             # saved_idxes = (save_period == 0)
             save_period[save_period > 0] -= 1
-            save_period[saved_idxes] = self.save_period
+            save_period[saved_idxes] = self.save_period  # 3
 
         saved_embed = embed[saved_idxes]
         if len(saved_embed) > 0:
@@ -64,15 +64,15 @@ class MemoryBank(nn.Module):
         if len(track_instances) == 0:
             return track_instances
 
-        key_padding_mask = track_instances.mem_padding_mask  # padding是干什么的？ 如何定义？
+        key_padding_mask = track_instances.mem_padding_mask  # 300 4
 
-        valid_idxes = key_padding_mask[:, -1] == 0
+        valid_idxes = key_padding_mask[:, -1] == 0  # n
         embed = track_instances.output_embedding[valid_idxes]  # (n, 256)
         # mem_bank 和 key_padding_mask 都是 (n, 4, 256) 关系？
 
         if len(embed) > 0:
-            prev_embed = track_instances.mem_bank[valid_idxes]
-            key_padding_mask = key_padding_mask[valid_idxes]
+            prev_embed = track_instances.mem_bank[valid_idxes]  # (n, 4, 256)
+            key_padding_mask = key_padding_mask[valid_idxes]  # (n, 4) 有时候可能不足四个
             embed2 = self.temporal_attn(
                 embed[None],  # (num_track, dim) to (1, num_track, dim)
                 prev_embed.transpose(0, 1),  # (num_track, mem_len, dim) to (mem_len, num_track, dim)
